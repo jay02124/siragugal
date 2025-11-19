@@ -1,236 +1,198 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, Image, ScrollView, Animated, Linking, Dimensions, Easing, RefreshControl, ActivityIndicator } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Image,
+  ScrollView,
+  Animated,
+  Linking,
+  Easing,
+  RefreshControl,
+  ActivityIndicator,
+} from 'react-native';
+import { useAudio } from '../../context/AudioContext';
 import { Bars3Icon } from 'react-native-heroicons/solid';
 import ImgAutoSlide from '../../components/ImgAutoSlide';
 import color from '../../config/color';
 import SideBar from '../../components/SideBar';
-import TrackPlayer, { Capability, Event  }  from 'react-native-track-player';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
-import { faPlayCircle, faPauseCircle, faVolumeUp, faVolumeDown, faGlobe } from '@fortawesome/free-solid-svg-icons';
+import {
+  faPlayCircle,
+  faPauseCircle,
+  faGlobe,
+} from '@fortawesome/free-solid-svg-icons';
 import { faInstagram, faXTwitter } from '@fortawesome/free-brands-svg-icons';
-import { broadwave, broadwave_alter } from '../../services/api/broadwave';
 import PopupAd from '../../components/PopupAd';
 import { getBanner } from '../../services/api/Banner/getBanner';
 import { getLiveBroadcast } from '../../services/api/LiveBroadcast/getLiveBroadcast';
 import { getContact } from '../../services/api/Contact Us/getContact';
 import { getPopupAd } from '../../services/api/Popup Ad/getPopupAd';
+import { broadwave } from '../../services/api/broadwave';
 
 export default function Home({ navigation }) {
-    const banner_1 = [
-        {
-            id: 1,
-            image: require("../../../assets/slider/1.jpg")
-        },
-        {
-            id: 2,
-            image: require("../../../assets/slider/2.jpg")
-        },
-        {
-            id: 3,
-            image: require("../../../assets/slider/3.jpg")
-        }
-    ];
+  const {
+    currentTrack,
+    isPlaying,
+    bufferingTrackId,
+    playTrack,
+    pausePlayback,
+    resumePlayback,
+    updateCurrentTrackMetadata,
+    defaultTrack,
+  } = useAudio();
 
-    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [volume, setVolume] = useState(0.8);
-    const [currentTrackTitle, setCurrentTrackTitle] = useState({});
-    const [liveAnim] = useState(new Animated.Value(1)); 
-    const [scrollAnim] = useState(new Animated.Value(0));
-    const [containerWidth, setContainerWidth] = useState(0);
-    const [textWidth, setTextWidth] = useState(0);
-    const [showPopupAd, setShowPopupAd] = useState(true);
-    const [showAd, setShowAd] = useState([]);
-    
-    const [banner, setBanner] = useState({});
-    const [liveBroadcast, setLiveBroadcast] = useState({});
-    const liveLink = liveBroadcast.broadcast_title;
-    const [contactus, setContactus] = useState({})
-    const [loading, setLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);  
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [liveAnim] = useState(new Animated.Value(1));
+  const [scrollAnim] = useState(new Animated.Value(0));
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [textWidth, setTextWidth] = useState(0);
+  const [showPopupAd, setShowPopupAd] = useState(true);
+  const [showAd, setShowAd] = useState([]);
 
-    useEffect(() => {
-        fetchBanner();
-        fetchLiveBroadcast();
-        fetchAd();
-        fetchContact();
-    }, [])
+  const [banner, setBanner] = useState({});
+  const [liveBroadcast, setLiveBroadcast] = useState({});
+  const [contactus, setContactus] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);  
 
-    const fetchBanner = async () => {
-        try {
-            const response = await getBanner();
-            setBanner(response.data)
-        }
-        catch {
-            console.error("Failed to fetch Banner", error);
-        } finally {
-            setLoading(false);
-            setRefreshing(false);
-        }
+  useEffect(() => {
+    fetchBanner();
+    fetchLiveBroadcast();
+    fetchAd();
+    fetchContact();
+  }, []);
+
+  const animateLiveButton = () => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(liveAnim, {
+          toValue: 1.2,
+          duration: 500,
+          useNativeDriver: true,
+        }),
+        Animated.timing(liveAnim, {
+          toValue: 1,
+          duration: 500,
+          useNativeDriver: true,
+        }),
+      ]),
+    ).start();
+  };
+
+  useEffect(() => {
+    animateLiveButton();
+  }, [liveAnim]);
+
+  const fmTrack = useMemo(
+    () => ({
+      ...defaultTrack,
+      url: broadwave,
+      title: liveBroadcast?.broadcast_title || defaultTrack.title,
+      artist: 'SIRAGUGAL CRS FM 89.6 MHz',
+      artwork: require('../../../assets/logo/logo.png'),
+    }),
+    [defaultTrack, liveBroadcast?.broadcast_title],
+  );
+
+  const isFmActive = currentTrack?.id === fmTrack.id;
+  const isFmPlaying = isFmActive && isPlaying;
+  const isFmBuffering = bufferingTrackId === fmTrack.id;
+
+  const handleFmToggle = () => {
+    if (!isFmActive) {
+      playTrack(fmTrack);
+      return;
     }
-
-    const fetchLiveBroadcast = async () => {    
-        try {
-            const response = await getLiveBroadcast();
-            setLiveBroadcast(response.data[0])
-            // console.log("Live link", response.data[0].broadcast_link)
-        }
-        catch {
-            console.error("Failed to fetch Live Broadcast", error);
-        } finally {
-            setLoading(false);
-            setRefreshing(false);
-        }
+    if (isFmPlaying) {
+      pausePlayback();
+    } else {
+      resumePlayback();
     }
+  };
 
-    const fetchContact = async () => {
-        try {
-          const response = await getContact();
-          setContactus(response.data);
-        }
-        catch {
-          console.error("Failed to fetch contact", error);
-        } 
-        finally {
-          setLoading(false);
-          setRefreshing(false);
-        }
+  useEffect(() => {
+    if (isFmActive) {
+      updateCurrentTrackMetadata({
+        title: liveBroadcast?.broadcast_title || fmTrack.title,
+      });
     }
+  }, [isFmActive, liveBroadcast?.broadcast_title, fmTrack.title, updateCurrentTrackMetadata]);
 
-    const fetchAd = async () => {
-        try {
-          const response = await getPopupAd();  
-          setShowAd(response.data);
-        //   console.log("setshowad", response.data.length)
-        }
-        catch {
-          console.error("Failed to fetch ad", error);
-        } 
-        finally {
-          setLoading(false);
-          setRefreshing(false);
-        }
+  const fetchBanner = async () => {
+    try {
+      const response = await getBanner();
+      setBanner(response.data);
+    } catch (error) {
+      console.error('Failed to fetch Banner', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
+  };
 
-    useEffect(() => {
-        setupTrackPlayer();
-        animateLiveButton();
-    
-        const onAudioFocusChange = TrackPlayer.addEventListener(Event.RemoteDuck, (event) => {
-            if (event.paused) {
-                // Another app is playing audio; pause playback
-                TrackPlayer.pause();
-                setIsPlaying(false);
-            } else {
-                // Resume playback when focus is regained
-                TrackPlayer.play();
-                setIsPlaying(true);
-            }
-        });
-    
-        return () => {
-            onAudioFocusChange.remove();
-            TrackPlayer.reset();
-        };
-    }, []);
+  const fetchLiveBroadcast = async () => {
+    try {
+      const response = await getLiveBroadcast();
+      setLiveBroadcast(response.data[0]);
+    } catch (error) {
+      console.error('Failed to fetch Live Broadcast', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
-    useEffect(() => {
-        if (containerWidth > 0 && textWidth > 0) {
-            startScrolling();
-        }
-    }, [containerWidth, textWidth]);
+  const fetchContact = async () => {
+    try {
+      const response = await getContact();
+      setContactus(response.data);
+    } catch (error) {
+      console.error('Failed to fetch contact', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
-    const setupTrackPlayer = async () => {
-        await TrackPlayer.setupPlayer();
+  const fetchAd = async () => {
+    try {
+      const response = await getPopupAd();
+      setShowAd(response.data);
+    } catch (error) {
+      console.error('Failed to fetch ad', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
-        // Update TrackPlayer options to include ducking support
-        await TrackPlayer.updateOptions({
-            stopWithApp: true,
-            capabilities: [
-                Capability.Play,
-                Capability.Pause,
-                Capability.Stop,
-            ],
-            notificationCapabilities: [
-                Capability.Play,
-                Capability.Pause,
-                Capability.Stop,
-            ],
-            compactCapabilities: [Capability.Play, Capability.Pause],
-            ongoing: true,
-        });
+  useEffect(() => {
+    if (containerWidth > 0 && textWidth > 0) {
+      startScrolling();
+    }
+  }, [containerWidth, textWidth]);
 
-        await TrackPlayer.add({
-            id: '1',
-            url: broadwave,
-            title: liveBroadcast.broadcast_title || "SIRAGUGAL CRS FM Live Streaming",
-            artist: 'SIRAGUGAL CRS FM 89.6 MHz',
-            artwork: require("../../../assets/logo/logo.png"),  
-        });
+  const startScrolling = () => {
+    scrollAnim.setValue(containerWidth);
+    const speedFactor = 18;
 
-        TrackPlayer.setVolume(volume);
+    const animation = Animated.loop(
+      Animated.timing(scrollAnim, {
+        toValue: -textWidth,
+        duration: (containerWidth + textWidth) * 1 * speedFactor,
+        useNativeDriver: true,
+        easing: Easing.linear,
+      }),
+    );
 
-        TrackPlayer.addEventListener('remote-duck', async (data) => {
-            if (data.paused) {
-                await TrackPlayer.pause();
-                setIsPlaying(false);
-            } else if (!isPlaying) {
-                await TrackPlayer.play();
-                setIsPlaying(true);
-            }
-        });
+    animation.start();
+  };
 
-        await TrackPlayer.play();
-        setIsPlaying(true);
-        
-    }; 
-
-    const togglePlayback = async () => {
-        if (isPlaying) {
-            await TrackPlayer.pause();
-        } else {
-            await TrackPlayer.play();
-        }
-        setIsPlaying(!isPlaying);
-    };
-
-    const animateLiveButton = () => {
-        Animated.loop(
-            Animated.sequence([
-                Animated.timing(liveAnim, {
-                    toValue: 1.2,
-                    duration: 500,
-                    useNativeDriver: true,
-                }),
-                Animated.timing(liveAnim, {
-                    toValue: 1,
-                    duration: 500,
-                    useNativeDriver: true,
-                }),
-            ])
-        ).start();
-    };
-
-    const startScrolling = () => {
-        scrollAnim.setValue(containerWidth);
-        const speedFactor = 18;
-        
-        const animation = Animated.loop(
-            Animated.timing(scrollAnim, {
-                toValue: -textWidth,
-                duration: (containerWidth + textWidth) * 1 * speedFactor,
-                useNativeDriver: true,
-                easing: Easing.linear,
-            })
-        );
-    
-        animation.start();
-    };
-
-    const onRefresh = () => {
-        setRefreshing(true);
-        fetchBanner();
-    };
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchBanner();
+  };
     
     return (
         <View className="flex-1" style={{ backgroundColor: color.shadow }}>
@@ -302,19 +264,31 @@ export default function Home({ navigation }) {
 
                     <View className="flex-row justify-center items-center w-full mt-2">
                         {/* Play / Pause Button */}
-                        <TouchableOpacity activeOpacity={0.8} onPress={togglePlayback} className="p-3" style={{minWidth: 48,minHeight: 48}}>
-                            {isPlaying ? (
-                                <View className="items-center justify-center">
-                                    <FontAwesomeIcon icon={faPauseCircle} size={30} color={color.primary} />
-                                    <Text className="text-base text-black font-bold mt-2 text-center">Pause</Text>
-                                </View>
-                            ) : (
-                                <View className="items-center justify-center">
-                                    <FontAwesomeIcon icon={faPlayCircle} size={30} color={color.primary} />
-                                    <Text className="text-base text-black font-bold mt-2 text-center">Play</Text>
-                                </View>
-                            )}
-                        </TouchableOpacity>
+                        <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={handleFmToggle}
+            className="p-3"
+            style={{ minWidth: 48, minHeight: 48 }}>
+            {isFmBuffering ? (
+              <View className="items-center justify-center">
+                <ActivityIndicator size="small" color={color.primary} />
+                <Text className="text-base text-black font-bold mt-2 text-center">
+                  Loading
+                </Text>
+              </View>
+            ) : (
+              <View className="items-center justify-center">
+                <FontAwesomeIcon
+                  icon={isFmPlaying ? faPauseCircle : faPlayCircle}
+                  size={30}
+                  color={color.primary}
+                />
+                <Text className="text-base text-black font-bold mt-2 text-center">
+                  {isFmPlaying ? 'Pause' : 'Play'}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
                     </View>
                 </View>
 
@@ -347,9 +321,12 @@ export default function Home({ navigation }) {
                 onClose={() => setIsSidebarOpen(false)}
                 navigation={navigation}
             />
-            {showAd.length>0 && (
-                <PopupAd isVisible={showPopupAd} onClose={() => setShowPopupAd(false)}/>
-            )}
+      {showAd.length > 0 && (
+        <PopupAd
+          isVisible={showPopupAd}
+          onClose={() => setShowPopupAd(false)}
+        />
+      )}
         </View>
     );
 }
