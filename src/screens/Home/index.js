@@ -134,6 +134,7 @@ export default function Home({ navigation }) {
   const fetchLiveBroadcast = async () => {
     try {
       const response = await getLiveBroadcast();
+      console.log(response)
       setLiveBroadcast(response.data[0]);
     } catch (error) {
       console.error('Failed to fetch Live Broadcast', error);

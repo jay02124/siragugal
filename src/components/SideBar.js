@@ -3,6 +3,14 @@ import { View, Text, TouchableOpacity, StyleSheet, Dimensions, Animated, Image, 
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import { faHome, faPodcast, faMusic, faInfoCircle, faPhone, faShareAlt, faFileContract, faLock, faVideo } from '@fortawesome/free-solid-svg-icons';
 import color from '../config/color';
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// Utility: make numbers responsive by scale
+const guidelineBaseWidth = 375; // iPhone X width as baseline
+const guidelineBaseHeight = 812; // iPhone X height
+
+const scale = size => (SCREEN_WIDTH / guidelineBaseWidth) * size;
+const verticalScale = size => (SCREEN_HEIGHT / guidelineBaseHeight) * size;
 
 const SideBar = ({ navigation, isOpen, onClose }) => {
   const { width } = Dimensions.get('window');
@@ -195,7 +203,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    minHeight: 48
+    minHeight: scale(48),
   },
   sidebar: {
     backgroundColor: '#fff',
@@ -203,58 +211,60 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: 2,
+      height: scale(2),
     },
     shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+    shadowRadius: scale(3.84),
     // backgroundColor: color.primary
   },
   logoContainer: {
     alignItems: 'center',
-    paddingVertical: 20,
+    paddingVertical: verticalScale(30),
     backgroundColor: color.primary,
-    height: 180,
-    marginBottom: 30
+    height: verticalScale(180),
+    marginBottom: verticalScale(30),
   },
   logo: {
-    width: 180,
-    height: 180,
+    width: scale(175),
+    height: scale(175),
     objectFit: "cover",
-    padding: 10,
+    padding: scale(10),
     alignItems: 'center',
-    marginLeft: 10,
+    marginLeft: scale(0),
+    marginTop: -verticalScale(3),
+    // backgroundColor:'red'
   },
   logo_main: {
-    width: 180,
-    height: 180,
-    borderRadius: 90,
+    width: scale(170),
+    height: scale(170),
+    borderRadius: scale(82.5), // Half of width/height
     backgroundColor: color.white,
-    marginTop: 10,
+    marginTop: verticalScale(10),
     alignItems: 'center',
   },
   item: {
-    paddingVertical: 30,
-    paddingHorizontal: 20,
+    paddingVertical: verticalScale(30),
+    paddingHorizontal: scale(20),
     borderBottomWidth: 1,
     borderBottomColor: color.shadow,
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 48
+    minHeight: scale(48),
   },
   itemText: {
-    fontSize: 16,
+    fontSize: scale(16),
     color: '#333',
     fontWeight: 'bold',
-    marginLeft: 10,
+    marginLeft: scale(10),
   },
   itemAnimation: {
-    fontSize: 14,
+    fontSize: scale(14),
     color: 'red',
     fontWeight: 'bold',
-    marginLeft: 10,
+    marginLeft: scale(10),
   },
   icon: {
-    marginRight: 10,
+    marginRight: scale(10),
   },
   down: {
     marginLeft: 'auto',
@@ -266,11 +276,11 @@ const styles = StyleSheet.create({
   parentItemContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 15,
+    paddingHorizontal: scale(10),
+    paddingVertical: verticalScale(15),
     justifyContent: 'space-between',
-    minHeight: 48,
-    minWidth: 48,
+    minHeight: scale(48),
+    minWidth: scale(48),
   },
   parentItemTextContainer: {
     flexDirection: 'row',
@@ -281,17 +291,17 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   subItems: {
-    marginLeft: 50,
+    marginLeft: scale(50),
   },
   subItem: {
-    paddingVertical: 10,
+    paddingVertical: verticalScale(10),
     flexDirection: 'row',
     alignItems: 'center',
   },
   subItemText: {
-    fontSize: 14,
+    fontSize: scale(14),
     color: '#000',
-    marginLeft: 10,
+    marginLeft: scale(10),
   },
 });
 

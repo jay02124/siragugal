@@ -1,6 +1,14 @@
-import React, { createContext, useContext, useState, useRef, useEffect, useCallback } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+} from 'react';
 import TrackPlayer, { Capability, Event, State } from 'react-native-track-player';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getLiveBroadcast } from '../services/api/LiveBroadcast/getLiveBroadcast';
 
 const AudioContext = createContext();
 
@@ -10,14 +18,18 @@ export const AudioProvider = ({ children }) => {
   const [isBuffering, setIsBuffering] = useState(false);
   const [bufferingTrackId, setBufferingTrackId] = useState(null);
   const [trackList, setTrackList] = useState([]);
-  const trackPlayerInitialized = useRef(false);
-  const pausedPositions = useRef({}); // Store paused positions for resume functionality
+  const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
+  const [playerReady, setPlayerReady] = useState(false);
 
+  const trackPlayerInitialized = useRef(false);
+  const pausedPositions = useRef({});
+  const lastAutoPlayRef = useRef(null); //  <-- prevents infinite auto-play loop
+
+  // ------------------------------------------------------------
   // Initialize TrackPlayer
+  // ------------------------------------------------------------
   const initializeTrackPlayer = useCallback(async () => {
-    if (trackPlayerInitialized.current) {
-      return;
-    }
+    if (trackPlayerInitialized.current) return;
 
     try {
       await TrackPlayer.setupPlayer();
@@ -30,219 +42,372 @@ export const AudioProvider = ({ children }) => {
         compactCapabilities: [Capability.Play, Capability.Pause],
         ongoing: true,
       });
-
-      // Set up event listeners
-      const playbackStateSubscription = TrackPlayer.addEventListener(Event.PlaybackState, async (event) => {
-        setIsPlaying(event.state === State.Playing);
-        setIsBuffering(event.state === State.Buffering);
-      });
-
-      const playbackErrorSubscription = TrackPlayer.addEventListener(Event.PlaybackError, (event) => {
-        console.error('Playback error:', event);
-        setIsBuffering(false);
-      });
-
-      const remotePlaySubscription = TrackPlayer.addEventListener(Event.RemotePlay, async () => {
-        await TrackPlayer.play();
-      });
-
-      const remotePauseSubscription = TrackPlayer.addEventListener(Event.RemotePause, async () => {
-        await TrackPlayer.pause();
-      });
-
-      const remoteStopSubscription = TrackPlayer.addEventListener(Event.RemoteStop, async () => {
-        await TrackPlayer.stop();
-      });
-
-      return () => {
-        playbackStateSubscription.remove();
-        playbackErrorSubscription.remove();
-        remotePlaySubscription.remove();
-        remotePauseSubscription.remove();
-        remoteStopSubscription.remove();
-      };
     } catch (error) {
-      console.error('Error initializing TrackPlayer:', error);
+      console.error('TrackPlayer init error:', error);
+      trackPlayerInitialized.current = false;
     }
   }, []);
 
-  useEffect(() => {
-    const unsubscribe = initializeTrackPlayer();
-    return () => {
-      unsubscribe && unsubscribe();
-    };
-  }, [initializeTrackPlayer]);
-
-  // Get default FM track
-  const getDefaultFMTrack = useCallback((broadwaveUrl, liveBroadcastTitle) => ({
-    id: 'fm-stream',
-    type: 'fm',
-    url: broadwaveUrl,
-    title: liveBroadcastTitle || 'SIRAGUGAL CRS FM 89.6 MHz',
-    artist: 'SIRAGUGAL CRS FM',
-    artwork: require('../../assets/logo/logo.png'),
-  }), []);
-
-  // Play track
-  const playTrack = useCallback(async (track, options = {}) => {
+  // ------------------------------------------------------------
+  // Fetch FM Stream Data
+  // ------------------------------------------------------------
+  const getFMStreamData = async () => {
     try {
-      setBufferingTrackId(track.id);
-      setIsBuffering(true);
+      const response = await getLiveBroadcast();
+      const live = response?.data?.[0];
 
-      // Stop current playback and clear queue
-      const queue = await TrackPlayer.getQueue();
-      if (queue.length > 0) {
-        await TrackPlayer.reset();
-      }
+      if (!live?.broadcast_link) return null;
 
-      // Add track and play
-      await TrackPlayer.add(track);
-      
-      // Handle resume position
-      if (options.position !== undefined) {
-        await TrackPlayer.seekTo(options.position);
-      } else if (pausedPositions.current[track.id] !== undefined) {
-        // Resume from saved position
-        await TrackPlayer.seekTo(pausedPositions.current[track.id]);
-      }
-
-      await TrackPlayer.play();
-      setCurrentTrack(track);
-      setIsPlaying(true);
-    } catch (error) {
-      console.error('Error playing track:', error);
-      setIsBuffering(false);
-      setBufferingTrackId(null);
+      return {
+        id: 'fm-stream',
+        type: 'fm',
+        url: live.broadcast_link,
+        title: live.broadcast_title || 'SIRAGUGAL FM',
+        artist: 'Siragugal FM',
+        artwork: require('../../assets/logo/logo.png'),
+      };
+    } catch (e) {
+      console.log('FM Stream Fetch Error:', e);
+      return null;
     }
-  }, []);
+  };
 
-  // Pause playback
+  // ------------------------------------------------------------
+  // Event Listener: Playback State
+  // ------------------------------------------------------------
+  useEffect(() => {
+    let subState, subErr, subPlay, subPause, subStop;
+
+    (async () => {
+      await initializeTrackPlayer();
+      setPlayerReady(true);
+
+      subState = TrackPlayer.addEventListener(Event.PlaybackState, async (event) => {
+        const state = event.state;
+
+        // --------------------------------------------------------------
+        // AUTO-PLAY FM WHEN PODCAST IS PAUSED / STOPPED
+        // --------------------------------------------------------------
+        if (
+          (state === State.Paused || state === State.Stopped) &&
+          currentTrack?.type === 'podcast'
+        ) {
+          const now = Date.now();
+
+          // prevent double triggering within 2 sec
+          if (lastAutoPlayRef.current && now - lastAutoPlayRef.current < 2000) {
+            return;
+          }
+          lastAutoPlayRef.current = now;
+
+          console.log("Podcast paused/stopped → Auto-playing FM");
+
+          // DO NOT autoplay FM if FM is already active
+          const active = await TrackPlayer.getActiveTrack();
+          if (active?.id === 'fm-stream') {
+            return;
+          }
+
+          const fmTrack = await getFMStreamData();
+          if (fmTrack) {
+            await playTrack(fmTrack);
+            return;
+          }
+        }
+
+        // --------------------------------------------------------------
+        // NORMAL STATE BEHAVIOR
+        // --------------------------------------------------------------
+        if (state === State.Playing) {
+          setIsPlaying(true);
+          setIsBuffering(false);
+        } else if (
+          state === State.Paused ||
+          state === State.Stopped ||
+          state === State.Ready
+        ) {
+          setIsPlaying(false);
+          setIsBuffering(false);
+          setBufferingTrackId(null);
+        }
+
+        if (state === State.Buffering || state === State.Connecting) {
+          setIsBuffering(true);
+        }
+      });
+
+      subErr = TrackPlayer.addEventListener(Event.PlaybackError, (event) => {
+        console.error('Playback Error:', event);
+        setIsBuffering(false);
+        setBufferingTrackId(null);
+      });
+
+      subPlay = TrackPlayer.addEventListener(Event.RemotePlay, async () => {
+        try {
+          await TrackPlayer.play();
+          setIsPlaying(true);
+        } catch (e) {
+          console.error('RemotePlay Error:', e);
+        }
+      });
+
+      subPause = TrackPlayer.addEventListener(Event.RemotePause, async () => {
+        try {
+          await TrackPlayer.pause();
+          setIsPlaying(false);
+        } catch (e) {
+          console.error('RemotePause Error:', e);
+        }
+      });
+
+      subStop = TrackPlayer.addEventListener(Event.RemoteStop, async () => {
+        try {
+          await TrackPlayer.stop();
+          setIsPlaying(false);
+          setCurrentTrack(null);
+        } catch (e) {
+          console.error('RemoteStop Error:', e);
+        }
+      });
+    })();
+
+    return () => {
+      subState?.remove();
+      subErr?.remove();
+      subPlay?.remove();
+      subPause?.remove();
+      subStop?.remove();
+    };
+  }, [initializeTrackPlayer, currentTrack]);
+
+  // ------------------------------------------------------------
+  // Auto-Play FM on App Startup
+  // ------------------------------------------------------------
+  useEffect(() => {
+    const autoPlayFM = async () => {
+      if (!playerReady) return;
+      if (hasPlayedOnce) return; // only once
+      if (currentTrack) return;  // something else playing
+
+      const fmTrack = await getFMStreamData();
+      if (fmTrack) {
+        await playTrack(fmTrack);
+        setHasPlayedOnce(true);
+      }
+    };
+
+    autoPlayFM();
+  }, [playerReady]);
+
+  // ------------------------------------------------------------
+  // PLAY TRACK
+  // ------------------------------------------------------------
+  const playTrack = useCallback(
+    async (track, options = {}) => {
+      try {
+        await initializeTrackPlayer();
+
+        // Save last podcast progress
+        if (currentTrack?.type === 'podcast') {
+          try {
+            const position = await TrackPlayer.getPosition();
+            pausedPositions.current[currentTrack.id] = position;
+
+            await AsyncStorage.setItem(
+              `podcast_position_${currentTrack.id}`,
+              JSON.stringify({ position, timestamp: Date.now() })
+            );
+          } catch (e) {}
+        }
+
+        const normalizedTrack = {
+          ...track,
+          id:
+            track.id?.toString() ||
+            track._id?.toString() ||
+            track.id ||
+            `id-${Date.now()}`,
+        };
+
+        setBufferingTrackId(normalizedTrack.id);
+        setIsBuffering(true);
+
+        // Clear queue
+        const queue = await TrackPlayer.getQueue();
+        if (queue.length > 0) await TrackPlayer.reset();
+
+        await TrackPlayer.add(normalizedTrack);
+
+        // Resume logic
+        if (options.position !== undefined) {
+          await TrackPlayer.seekTo(options.position);
+        } else if (pausedPositions.current[normalizedTrack.id] !== undefined) {
+          await TrackPlayer.seekTo(pausedPositions.current[normalizedTrack.id]);
+        } else {
+          const saved = await AsyncStorage.getItem(
+            `podcast_position_${normalizedTrack.id}`
+          );
+
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed.position !== undefined) {
+              pausedPositions.current[normalizedTrack.id] = parsed.position;
+              await TrackPlayer.seekTo(parsed.position);
+            }
+          }
+        }
+
+        await TrackPlayer.play();
+        setHasPlayedOnce(true);
+        setCurrentTrack(normalizedTrack);
+        setIsPlaying(true);
+      } catch (e) {
+        console.error('Play Error:', e);
+        setIsBuffering(false);
+        setBufferingTrackId(null);
+      }
+    },
+    [initializeTrackPlayer, currentTrack]
+  );
+
+  // ------------------------------------------------------------
+  // PAUSE
+  // ------------------------------------------------------------
   const pausePlayback = useCallback(async () => {
     try {
       const position = await TrackPlayer.getPosition();
-      if (currentTrack) {
+      if (currentTrack?.type === 'podcast') {
         pausedPositions.current[currentTrack.id] = position;
-        // Save to AsyncStorage for persistence
-        await AsyncStorage.setItem(`podcast_position_${currentTrack.id}`, JSON.stringify({ position, timestamp: Date.now() }));
+
+        await AsyncStorage.setItem(
+          `podcast_position_${currentTrack.id}`,
+          JSON.stringify({ position, timestamp: Date.now() })
+        );
       }
+
       await TrackPlayer.pause();
       setIsPlaying(false);
-    } catch (error) {
-      console.error('Error pausing playback:', error);
+    } catch (e) {
+      console.error('Pause Error:', e);
     }
   }, [currentTrack]);
 
-  // Resume playback
+  // ------------------------------------------------------------
+  // RESUME
+  // ------------------------------------------------------------
   const resumePlayback = useCallback(async () => {
+    if (!currentTrack) return;
     try {
-      if (!currentTrack) {
-        return undefined;
-      }
+      await initializeTrackPlayer();
       await TrackPlayer.play();
+      setHasPlayedOnce(true);
       setIsPlaying(true);
-      return true;
-    } catch (error) {
-      console.error('Error resuming playback:', error);
-      return undefined;
+    } catch (e) {
+      console.error('Resume Error:', e);
     }
-  }, [currentTrack]);
+  }, [currentTrack, initializeTrackPlayer]);
 
-  // Stop playback
+  // ------------------------------------------------------------
+  // STOP
+  // ------------------------------------------------------------
   const stopPlayback = useCallback(async () => {
     try {
       await TrackPlayer.stop();
       setIsPlaying(false);
       setCurrentTrack(null);
-    } catch (error) {
-      console.error('Error stopping playback:', error);
+      setIsBuffering(false);
+      setBufferingTrackId(null);
+    } catch (e) {
+      console.error('Stop Error:', e);
     }
   }, []);
 
-  // Get last paused podcast
-  const getLastPausedPodcast = useCallback(() => {
-    if (!currentTrack || currentTrack.type !== 'podcast') {
-      // Check if there's a saved position for any podcast
-      const savedKeys = Object.keys(pausedPositions.current);
-      if (savedKeys.length > 0) {
-        const lastSavedKey = savedKeys[savedKeys.length - 1];
-        return {
-          id: lastSavedKey,
-          track: { id: lastSavedKey },
-        };
-      }
+  // ------------------------------------------------------------
+  // PODCAST STORAGE
+  // ------------------------------------------------------------
+  const getLastPausedPodcast = useCallback(async () => {
+    try {
+      const data = await AsyncStorage.getItem('lastPodcast');
+      return data ? JSON.parse(data) : null;
+    } catch (_) {
+      return null;
     }
-    return null;
-  }, [currentTrack]);
+  }, []);
 
-  // Clear saved position for podcast
+  const saveLastPodcast = useCallback(async (info) => {
+    try {
+      await AsyncStorage.setItem('lastPodcast', JSON.stringify(info));
+    } catch (_) {}
+  }, []);
+
   const clearSavedPodcast = useCallback(async (podcastId) => {
     try {
       delete pausedPositions.current[podcastId];
       await AsyncStorage.removeItem(`podcast_position_${podcastId}`);
-    } catch (error) {
-      console.error('Error clearing saved podcast:', error);
-    }
+    } catch (_) {}
   }, []);
 
-  // Update current track metadata (for notifications)
-// Prevent updateCurrentTrackMetadata from running unnecessarily by memoizing based on stable track ID
+  // ------------------------------------------------------------
+  // UPDATE METADATA
+  // ------------------------------------------------------------
   const updateCurrentTrackMetadata = useCallback(async (metadata) => {
     if (!currentTrack) return;
 
-    // Only update if the metadata actually changes something
-    const keys = Object.keys(metadata);
-    let changed = false;
-    for (let key of keys) {
-      if (currentTrack[key] !== metadata[key]) {
-        changed = true;
-        break;
-      }
-    }
+    const updated = { ...currentTrack, ...metadata };
+    setCurrentTrack(updated);
 
-    if (!changed) return; // no actual change, avoid loop
-
-    const updatedTrack = { ...currentTrack, ...metadata };
-    setCurrentTrack(updatedTrack);
     try {
-      await TrackPlayer.updateMetadataForTrack(0, updatedTrack);
-    } catch (error) {
-      console.error('Error updating metadata:', error);
+      await TrackPlayer.updateMetadataForTrack(0, updated);
+    } catch (e) {
+      console.error('Metadata Update Error:', e);
     }
-  // use only track id as dependency to prevent unnecessary re-creation
   }, [currentTrack?.id]);
 
-  const defaultTrack = {
-    id: 'fm-stream',
-    type: 'fm',
-    title: 'SIRAGUGAL CRS FM 89.6 MHz',
-    artist: 'SIRAGUGAL CRS FM',
-  };
+  // ------------------------------------------------------------
+  // EXPORT CONTEXT
+  // ------------------------------------------------------------
+  return (
+    <AudioContext.Provider
+      value={{
+        currentTrack,
+        isPlaying,
+        isBuffering,
+        bufferingTrackId,
 
-  const value = {
-    currentTrack,
-    isPlaying,
-    isBuffering,
-    bufferingTrackId,
-    trackList,
-    setTrackList,
-    playTrack,
-    pausePlayback,
-    resumePlayback,
-    stopPlayback,
-    getLastPausedPodcast,
-    clearSavedPodcast,
-    updateCurrentTrackMetadata,
-    defaultTrack,
-    pausedPositions: pausedPositions.current,
-  };
+        trackList,
+        setTrackList,
 
-  return <AudioContext.Provider value={value}>{children}</AudioContext.Provider>;
+        playTrack,
+        pausePlayback,
+        resumePlayback,
+        stopPlayback,
+
+        getLastPausedPodcast,
+        saveLastPodcast,
+        clearSavedPodcast,
+
+        updateCurrentTrackMetadata,
+
+        defaultTrack: {
+          id: 'fm-stream',
+          type: 'fm',
+          title: 'SIRAGUGAL CRS FM 89.6 MHz',
+          artist: 'SIRAGUGAL CRS FM',
+        },
+
+        getDefaultFMTrack: getFMStreamData,
+
+        pausedPositions: pausedPositions.current,
+        hasPlayedOnce,
+      }}
+    >
+      {children}
+    </AudioContext.Provider>
+  );
 };
 
 export const useAudio = () => {
-  const context = useContext(AudioContext);
-  if (!context) {
-    throw new Error('useAudio must be used within AudioProvider');
-  }
-  return context;
+  const ctx = useContext(AudioContext);
+  if (!ctx) throw new Error('useAudio must be used within AudioProvider');
+  return ctx;
 };
